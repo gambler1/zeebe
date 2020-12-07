@@ -8,13 +8,16 @@
 package io.zeebe.test.util.asserts;
 
 import io.zeebe.client.api.response.BrokerInfo;
+import io.zeebe.client.api.response.PartitionInfo;
 import io.zeebe.client.api.response.Topology;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
-import org.assertj.core.api.AbstractAssert;
+import org.assertj.core.api.AbstractObjectAssert;
 
-public class TopologyAssert extends AbstractAssert<TopologyAssert, Topology> {
+public final class TopologyAssert extends AbstractObjectAssert<TopologyAssert, Topology> {
 
   public TopologyAssert(final Topology topology) {
     super(topology, TopologyAssert.class);
@@ -42,6 +45,25 @@ public class TopologyAssert extends AbstractAssert<TopologyAssert, Topology> {
       failWithMessage(
           "Expected <%s> partitions at each broker, but found brokers with different partition count <%s>",
           partitionCount, brokersWithUnexpectedPartitionCount);
+    }
+
+    final Set<Integer> partitionsWithLeader =
+        brokers.stream()
+            .flatMap(b -> b.getPartitions().stream())
+            .filter(PartitionInfo::isLeader)
+            .map(PartitionInfo::getPartitionId)
+            .collect(Collectors.toUnmodifiableSet());
+    final Set<Integer> partitionsWithoutLeader =
+        brokers.stream()
+            .flatMap(b -> b.getPartitions().stream())
+            .filter(PartitionInfo::isLeader)
+            .map(PartitionInfo::getPartitionId)
+            .filter(Predicate.not(partitionsWithLeader::contains))
+            .collect(Collectors.toUnmodifiableSet());
+    if (!partitionsWithoutLeader.isEmpty()) {
+      failWithMessage(
+          "Expected every partition to have a leader,but found the following have none: <%s>",
+          partitionsWithoutLeader);
     }
 
     return this;
