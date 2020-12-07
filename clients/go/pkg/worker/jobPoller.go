@@ -17,6 +17,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"github.com/zeebe-io/zeebe/clients/go/pkg/entities"
 	"github.com/zeebe-io/zeebe/clients/go/pkg/pb"
 	"google.golang.org/grpc/codes"
@@ -40,6 +41,7 @@ type jobPoller struct {
 	remaining      int
 	threshold      int
 	metrics        JobWorkerMetrics
+	shouldRetry    func(ctx context.Context, err error) bool
 }
 
 func (poller *jobPoller) poll(closeWait *sync.WaitGroup) {
@@ -77,15 +79,25 @@ func (poller *jobPoller) activateJobs() {
 	defer cancel()
 
 	poller.request.MaxJobsToActivate = int32(poller.maxJobsActive - poller.remaining)
-	stream, err := poller.client.ActivateJobs(ctx, poller.request)
+	stream, err := poller.openStream(ctx)
 	if err != nil {
-		log.Println("Failed to request jobs for worker", poller.request.Worker, err)
+		log.Println(err.Error())
 		return
 	}
 
 	for {
 		response, err := stream.Recv()
 		if err != nil {
+			if poller.shouldRetry(ctx, err) {
+				// the headers are outdated and need to be remade
+				stream, err = poller.openStream(ctx)
+				if err == nil {
+					log.Printf("Failed to reopen job polling stream after UNATHENTICATED error: %v\n", err)
+					break
+				}
+				continue
+			}
+
 			if err != io.EOF && status.Code(err) != codes.ResourceExhausted {
 				log.Println("Failed to activate jobs for worker", poller.request.Worker, err)
 			}
@@ -99,6 +111,18 @@ func (poller *jobPoller) activateJobs() {
 			poller.jobQueue <- entities.Job{ActivatedJob: job}
 		}
 	}
+}
+
+func (poller *jobPoller) openStream(ctx context.Context) (pb.Gateway_ActivateJobsClient, error) {
+	stream, err := poller.client.ActivateJobs(ctx, poller.request)
+	if err != nil {
+		if poller.shouldRetry(ctx, err) {
+			return poller.openStream(ctx)
+		}
+		return nil, fmt.Errorf("Worker '%s' failed to open job stream due to error: %w", poller.request.Worker, err)
+	}
+
+	return stream, nil
 }
 
 func (poller *jobPoller) setJobsRemainingCountMetric(count int) {

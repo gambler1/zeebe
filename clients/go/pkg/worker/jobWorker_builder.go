@@ -16,6 +16,7 @@
 package worker
 
 import (
+	"context"
 	"github.com/zeebe-io/zeebe/clients/go/pkg/commands"
 	"github.com/zeebe-io/zeebe/clients/go/pkg/entities"
 	"github.com/zeebe-io/zeebe/clients/go/pkg/pb"
@@ -46,6 +47,7 @@ type JobWorkerBuilder struct {
 	pollInterval  time.Duration
 	pollThreshold float64
 	metrics       JobWorkerMetrics
+	shouldRetry   func(ctx context.Context, err error) bool
 }
 
 type JobWorkerBuilderStep1 interface {
@@ -172,6 +174,7 @@ func (builder *JobWorkerBuilder) Open() JobWorker {
 		remaining:      0,
 		threshold:      int(math.Round(float64(builder.maxJobsActive) * builder.pollThreshold)),
 		metrics:        builder.metrics,
+		shouldRetry:    builder.shouldRetry,
 	}
 
 	dispatcher := jobDispatcher{
@@ -190,7 +193,7 @@ func (builder *JobWorkerBuilder) Open() JobWorker {
 	}
 }
 
-func NewJobWorkerBuilder(gatewayClient pb.GatewayClient, jobClient JobClient) JobWorkerBuilderStep1 {
+func NewJobWorkerBuilder(gatewayClient pb.GatewayClient, jobClient JobClient, retryPred func(ctx context.Context, err error) bool) JobWorkerBuilderStep1 {
 	return &JobWorkerBuilder{
 		gatewayClient: gatewayClient,
 		jobClient:     jobClient,
@@ -204,5 +207,7 @@ func NewJobWorkerBuilder(gatewayClient pb.GatewayClient, jobClient JobClient) Jo
 			RequestTimeout: DefaultRequestTimeout.Milliseconds(),
 		},
 		requestTimeout: DefaultRequestTimeout + RequestTimeoutOffset,
+		shouldRetry:    retryPred,
 	}
+
 }
